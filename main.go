@@ -53,8 +53,8 @@ func main() {
 			index := strings.LastIndex(file, "/")
 			filename := file[index+1:]
 			prefix := file[:index+1]
-			_ = os.MkdirAll(prefix, 0755)
-			localFile, err := os.Create(prefix + filename)
+			_ = os.MkdirAll("backupFiles/"+prefix, 0755)
+			localFile, err := os.Create("backupFiles/" + prefix + filename)
 			if err != nil {
 				handleError("文件保存失败, 文件名:", file, err, &mu, &errNum)
 				return
