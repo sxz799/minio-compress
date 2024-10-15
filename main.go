@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/minio/minio-go/v7"
 	"io"
-	"math"
 	"minio-compress/utils"
 	"os"
 	"strings"
@@ -25,6 +24,7 @@ func main() {
 
 	minioObjChan := utils.ListFiles("2024/01/01/")
 	var successNum, errNum, reduceSize int
+	semaphore := make(chan struct{}, 20)
 	for objInfo := range minioObjChan {
 		if objInfo.Err != nil {
 			fmt.Println(objInfo.Err)
@@ -33,7 +33,8 @@ func main() {
 		wg.Add(1)
 		go func(obj minio.ObjectInfo) {
 			defer wg.Done()
-			file := objInfo.Key
+			semaphore <- struct{}{}
+			file := obj.Key
 			minioObj, err := utils.GetFile(file)
 			if err != nil {
 				handleError("无法获取文件:", file, err, &mu, &errNum)
@@ -50,9 +51,16 @@ func main() {
 				handleError("文件不是图片, 文件名:", file, nil, &mu, &errNum)
 				return
 			}
+			var filename, prefix string
 			index := strings.LastIndex(file, "/")
-			filename := file[index+1:]
-			prefix := file[:index+1]
+			if index == -1 {
+				filename = file
+				prefix = ""
+			} else {
+				filename = file[index+1:]
+				prefix = file[:index+1]
+			}
+
 			_ = os.MkdirAll("backupFiles/"+prefix, 0755)
 			localFile, err := os.Create("backupFiles/" + prefix + filename)
 			if err != nil {
@@ -61,6 +69,7 @@ func main() {
 			}
 			defer localFile.Close()
 			if _, err = io.Copy(localFile, minioObj); err != nil {
+				os.Remove("backupFiles/" + prefix + filename) // 删除文件
 				handleError("文件拷贝失败, 文件名:", file, err, &mu, &errNum)
 				return
 			}
@@ -68,6 +77,9 @@ func main() {
 			compressFileBuffer := bufferPool.Get().(*bytes.Buffer)
 			compressFileBuffer.Reset()
 			defer func() {
+				if r := recover(); r != nil {
+					fmt.Println("Recovered in compressFileBuffer", r)
+				}
 				compressFileBuffer.Reset() // 使用完毕后重置
 				bufferPool.Put(compressFileBuffer)
 			}()
@@ -77,12 +89,8 @@ func main() {
 				return
 			}
 			compressedSize := compressFileBuffer.Len()
-			if math.Abs(float64(compressedSize)-float64(stat.Size)) < 1024 {
-				handleError("压缩失败, 压缩后体积与压缩前体积不超过1KB, 文件名:", file, nil, &mu, &errNum)
-				return
-			}
-			if compressedSize >= int(stat.Size) {
-				handleError("文件压缩失败, 压缩后体积大于压缩前体积, 文件名:", file, nil, &mu, &errNum)
+			if compressedSize >= int(stat.Size) || int(stat.Size)-compressedSize < 1024 {
+				handleError("压缩失败, 压缩后体积无明显变化, 文件名:", file, nil, &mu, &errNum)
 				return
 			}
 			err = utils.UploadFile(file, contentType, compressFileBuffer)
@@ -95,7 +103,7 @@ func main() {
 				mu.Unlock()
 				fmt.Println("文件压缩成功,更新成功,文件名:", file, ",压缩前后体积:", stat.Size/1024, "KB /", compressedSize/1024, "KB")
 			}
-
+			<-semaphore
 		}(objInfo)
 	}
 	wg.Wait()
