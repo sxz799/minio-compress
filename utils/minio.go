@@ -6,15 +6,39 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"log"
+	"os"
 )
 
 var minioClient *minio.Client
-var bucketName = "inzone-property"
+var bucketName string
+var filePrefix string
 
 func InitMinioClient() {
-	endpoint := "10.160.160.137:9000"
-	accessKeyID := "property"
-	secretAccessKey := "Property@123"
+
+	endpoint := os.Getenv("MINIO_ENDPOINT")
+	if endpoint == "" {
+		endpoint = "10.160.160.137:9000"
+	}
+
+	accessKeyID := os.Getenv("MINIO_ACCESS_KEY_ID")
+	if accessKeyID == "" {
+		accessKeyID = "property"
+	}
+	secretAccessKey := os.Getenv("MINIO_SECRET_ACCESS_KEY")
+	if secretAccessKey == "" {
+		secretAccessKey = "Property@123"
+	}
+
+	bucketName = os.Getenv("MINIO_BUCKET_NAME")
+	if bucketName == "" {
+		bucketName = "inzone-property"
+	}
+
+	filePrefix = os.Getenv("MINIO_FILE_PREFIX")
+	if filePrefix == "" {
+		filePrefix = "2024/01/01/"
+	}
+
 	var err error
 	minioClient, err = minio.New(endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(accessKeyID, secretAccessKey, ""),
@@ -36,11 +60,11 @@ func UploadFile(objectName, contentType string, fileBuffer *bytes.Buffer) error 
 	return err
 }
 
-func ListFiles(prefix string) <-chan minio.ObjectInfo {
+func ListFiles() <-chan minio.ObjectInfo {
 	objectCh := minioClient.ListObjects(context.Background(), bucketName, minio.ListObjectsOptions{
 		WithMetadata: true,
 		Recursive:    true,
-		Prefix:       prefix,
+		Prefix:       filePrefix,
 	})
 	return objectCh
 }

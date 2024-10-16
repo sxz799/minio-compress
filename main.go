@@ -21,8 +21,7 @@ var bufferPool = sync.Pool{
 
 func main() {
 	utils.InitMinioClient()
-
-	minioObjChan := utils.ListFiles("2024/01/01/")
+	minioObjChan := utils.ListFiles()
 	var successNum, errNum, reduceSize int
 	semaphore := make(chan struct{}, 20)
 	for objInfo := range minioObjChan {
@@ -32,7 +31,10 @@ func main() {
 		}
 		wg.Add(1)
 		go func(obj minio.ObjectInfo) {
-			defer wg.Done()
+			defer func() {
+				<-semaphore
+				wg.Done()
+			}()
 			semaphore <- struct{}{}
 			file := obj.Key
 			minioObj, err := utils.GetFile(file)
@@ -75,7 +77,6 @@ func main() {
 			}
 
 			compressFileBuffer := bufferPool.Get().(*bytes.Buffer)
-			compressFileBuffer.Reset()
 			defer func() {
 				if r := recover(); r != nil {
 					fmt.Println("Recovered in compressFileBuffer", r)
@@ -83,14 +84,14 @@ func main() {
 				compressFileBuffer.Reset() // 使用完毕后重置
 				bufferPool.Put(compressFileBuffer)
 			}()
-			err = utils.CompressFile(file, contentType, compressFileBuffer)
+			err = utils.CompressFile("backupFiles/"+file, contentType, compressFileBuffer)
 			if err != nil {
 				handleError("文件压缩失败, 文件名:", file, err, &mu, &errNum)
 				return
 			}
 			compressedSize := compressFileBuffer.Len()
 			if compressedSize >= int(stat.Size) || int(stat.Size)-compressedSize < 1024 {
-				handleError("压缩失败, 压缩后体积无明显变化, 文件名:", file, nil, &mu, &errNum)
+				handleError("文件过滤压缩, 压缩后体积无明显变化, 文件名:", file, nil, &mu, &errNum)
 				return
 			}
 			err = utils.UploadFile(file, contentType, compressFileBuffer)
@@ -103,14 +104,17 @@ func main() {
 				mu.Unlock()
 				fmt.Println("文件压缩成功,更新成功,文件名:", file, ",压缩前后体积:", stat.Size/1024, "KB /", compressedSize/1024, "KB")
 			}
-			<-semaphore
+
 		}(objInfo)
 	}
 	wg.Wait()
 	fmt.Println("=================处理完成=================")
 	fmt.Println("成功数量:", successNum)
 	fmt.Println("失败数量:", errNum)
-	fmt.Println("总共减少体积:", reduceSize/1024, "KB", ",约", reduceSize/1024/1024, "MB", ",约", reduceSize/1024/1024/1024, "GB")
+	fmt.Printf("总共减少体积: %.4f KB, 约 %.4f MB, 约 %.4f GB\n",
+		float64(reduceSize)/1024,
+		float64(reduceSize)/1024/1024,
+		float64(reduceSize)/1024/1024/1024)
 }
 
 func handleError(msg string, file string, err error, mu *sync.Mutex, errNum *int) {
