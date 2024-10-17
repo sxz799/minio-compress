@@ -36,7 +36,7 @@ func InitMinioClient() {
 
 	filePrefix = os.Getenv("MINIO_FILE_PREFIX")
 	if filePrefix == "" {
-		filePrefix = "2024/01/01/"
+		filePrefix = "2024/03/08/"
 	}
 
 	var err error
