@@ -7,6 +7,7 @@ import (
 	"io"
 	"minio-compress/utils"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -25,7 +26,16 @@ func main() {
 	statisticsMap.Store("successNum", 0)
 	statisticsMap.Store("errNum", 0)
 	statisticsMap.Store("reduceSize", 0.00)
-	semaphore := make(chan struct{}, 20)
+	ProcessNum := os.Getenv("PROCESS_NUM")
+	if ProcessNum == "" {
+		ProcessNum = "20"
+	}
+	processNum, err := strconv.Atoi(ProcessNum)
+	if err != nil {
+		fmt.Println("PROCESS_NUM must be a number")
+		os.Exit(1)
+	}
+	semaphore := make(chan struct{}, processNum)
 	for objInfo := range minioObjChan {
 		if objInfo.Err != nil {
 			fmt.Println(objInfo.Err)
