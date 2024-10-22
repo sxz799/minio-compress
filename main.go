@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/minio/minio-go/v7"
 	"io"
+	"log"
 	"minio-compress/utils"
 	"os"
 	"strconv"
@@ -32,13 +33,17 @@ func main() {
 	}
 	processNum, err := strconv.Atoi(ProcessNum)
 	if err != nil {
-		fmt.Println("PROCESS_NUM must be a number")
+		takeLog("PROCESS_NUM must be a number")
 		os.Exit(1)
 	}
+
+	utils.InitLogger()
+	utils.Sync()
+
 	semaphore := make(chan struct{}, processNum)
 	for objInfo := range minioObjChan {
 		if objInfo.Err != nil {
-			fmt.Println(objInfo.Err)
+			takeLog(objInfo.Err)
 			continue
 		}
 		wg.Add(1)
@@ -51,20 +56,20 @@ func main() {
 			file := obj.Key
 			minioObj, err := utils.GetFile(file)
 			if err != nil {
-				fmt.Println("无法获取文件:", file)
+				takeLog("无法获取文件:", file)
 				statisticsCount("errNum")
 				return
 			}
 			defer minioObj.Close()
 			stat, err := minioObj.Stat()
 			if err != nil {
-				fmt.Println("无法获取文件状态:", file)
+				takeLog("无法获取文件状态:", file)
 				statisticsCount("errNum")
 				return
 			}
 			contentType := stat.ContentType
 			if !strings.Contains(contentType, "image") {
-				fmt.Println("文件不是图片, 文件名:", file)
+				takeLog("文件不是图片, 文件名:", file)
 				statisticsCount("errNum")
 				return
 			}
@@ -81,14 +86,14 @@ func main() {
 			_ = os.MkdirAll("backupFiles/"+prefix, 0755)
 			localFile, err := os.Create("backupFiles/" + prefix + filename)
 			if err != nil {
-				fmt.Println("文件保存失败, 文件名:", file, err)
+				takeLog("文件保存失败, 文件名:", file, err)
 				statisticsCount("errNum")
 				return
 			}
 			defer localFile.Close()
 			if _, err = io.Copy(localFile, minioObj); err != nil {
 				os.Remove("backupFiles/" + prefix + filename) // 删除文件
-				fmt.Println("文件拷贝失败, 文件名:", file, err)
+				takeLog("文件拷贝失败, 文件名:", file, err)
 				statisticsCount("errNum")
 				return
 			}
@@ -96,31 +101,31 @@ func main() {
 			compressFileBuffer := bufferPool.Get().(*bytes.Buffer)
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Println("Recovered in compressFileBuffer", r)
+					takeLog("Recovered in compressFileBuffer", r)
 				}
 				compressFileBuffer.Reset() // 使用完毕后重置
 				bufferPool.Put(compressFileBuffer)
 			}()
 			err = utils.CompressFile("backupFiles/"+file, contentType, compressFileBuffer)
 			if err != nil {
-				fmt.Println("文件压缩失败, 文件名:", file, err)
+				takeLog("文件压缩失败, 文件名:", file, err)
 				statisticsCount("errNum")
 				return
 			}
 			compressedSize := compressFileBuffer.Len()
 			if compressedSize >= int(stat.Size) || int(stat.Size)-compressedSize < 1024 {
-				fmt.Println("文件过滤压缩, 压缩后体积无明显变化, 文件名:", file)
+				takeLog("文件过滤压缩, 压缩后体积无明显变化, 文件名:", file)
 				statisticsCount("errNum")
 				return
 			}
 			err = utils.UploadFile(file, contentType, compressFileBuffer)
 			if err != nil {
-				fmt.Println("文件压缩成功, 更新失败, 文件名:", file, err)
+				takeLog("文件压缩成功, 更新失败, 文件名:", file, err)
 				statisticsCount("errNum")
 			} else {
 				statisticsSize("reduceSize", float64(int(stat.Size)-compressedSize))
 				statisticsCount("successNum")
-				fmt.Println("文件压缩成功,更新成功,文件名:", file, ",压缩前后体积:", stat.Size/1024, "KB /", compressedSize/1024, "KB")
+				takeLog("文件压缩成功,更新成功,文件名:", file, ",压缩前后体积:", stat.Size/1024, "KB /", compressedSize/1024, "KB")
 			}
 
 		}(objInfo)
@@ -129,13 +134,13 @@ func main() {
 	successNum, _ := statisticsMap.Load("successNum")
 	errNum, _ := statisticsMap.Load("errNum")
 	reduceSize, _ := statisticsMap.Load("reduceSize")
-	fmt.Println("=================处理完成=================")
-	fmt.Println("成功数量:", successNum)
-	fmt.Println("失败数量:", errNum)
-	fmt.Printf("总共减少体积: %.4f KB, 约 %.4f MB, 约 %.4f GB\n",
+	takeLog("=================处理完成=================")
+	takeLog("成功数量:", successNum)
+	takeLog("失败数量:", errNum)
+	takeLog(fmt.Sprintf("总共减少体积: %.4f KB, 约 %.4f MB, 约 %.4f GB",
 		reduceSize.(float64)/1024,
 		reduceSize.(float64)/1024/1024,
-		reduceSize.(float64)/1024/1024/1024)
+		reduceSize.(float64)/1024/1024/1024))
 }
 
 func statisticsCount(key string) {
@@ -146,4 +151,9 @@ func statisticsCount(key string) {
 func statisticsSize(key string, count float64) {
 	v, _ := statisticsMap.Load(key)
 	statisticsMap.Store(key, v.(float64)+count)
+}
+
+func takeLog(args ...any) {
+	log.Println(args)
+	utils.Info(fmt.Sprint(args...))
 }
