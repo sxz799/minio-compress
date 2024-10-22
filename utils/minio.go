@@ -54,7 +54,7 @@ func GetFile(objectName string) (*minio.Object, error) {
 }
 
 func UploadFile(objectName, contentType string, fileBuffer *bytes.Buffer) error {
-	_, err := minioClient.PutObject(context.Background(), bucketName, objectName, fileBuffer, -1, minio.PutObjectOptions{
+	_, err := minioClient.PutObject(context.Background(), bucketName, objectName, fileBuffer, int64(fileBuffer.Len()), minio.PutObjectOptions{
 		ContentType: contentType,
 	})
 	return err
